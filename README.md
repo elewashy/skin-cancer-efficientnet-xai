@@ -3,8 +3,9 @@
 <div align="center">
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EfficientNet--B0-ee4c2c?logo=pytorch&logoColor=white)
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-2.13%2B-orange?logo=tensorflow&logoColor=white)
-![Keras](https://img.shields.io/badge/Keras-EfficientNet--B0-red?logo=keras&logoColor=white)
+![Flask](https://img.shields.io/badge/Web%20App-Flask-black?logo=flask&logoColor=white)
 ![XAI](https://img.shields.io/badge/XAI-Grad--CAM%20%7C%20LIME-green)
 ![Dataset](https://img.shields.io/badge/Dataset-ISIC%20Skin%20Cancer-lightgrey)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
@@ -27,6 +28,7 @@ Classifies dermoscopy images as *Malignant* or *Benign* with interpretable Grad-
 - [Results](#results)
 - [Project Structure](#project-structure)
 - [Setup & Usage](#setup--usage)
+- [Web App](#web-app)
 - [Tech Stack](#tech-stack)
 
 ---
@@ -38,7 +40,7 @@ This project tackles the binary classification of skin lesion images into **Mali
 - **Transfer Learning** — EfficientNet-B0 pretrained on ImageNet, fine-tuned on the ISIC dermoscopy dataset
 - **Baseline Comparison** — Vanilla CNN trained from scratch to benchmark against the transfer learning approach
 - **Explainable AI (XAI)** — Grad-CAM heatmaps and LIME explanations to identify which skin regions drive predictions
-- **Two-phase fine-tuning** — Frozen base → full fine-tune with lower learning rate for stable convergence
+- **PyTorch GPU training** — Full fine-tune with AdamW + CosineAnnealingLR + mixed-precision (AMP)
 
 Early detection of malignant skin lesions can be life-saving. This system aims to assist dermatologists by providing not just a prediction, but a visual explanation grounded in the image pixels.
 
@@ -51,10 +53,10 @@ flowchart TD
     A[🗂️ ISIC Dataset\nKaggle] --> B[Data Loading\nPathlib glob · DataFrame]
     B --> C[Exploratory Data Analysis\nClass distribution · Sample images]
     C --> D[Preprocessing\n80/20 Train-Val Split · Stratified]
-    D --> E[tf.data Pipeline\nBatch=32 · Prefetch · Cache]
+    D --> E[PyTorch DataLoader\nBatch=48 GPU · 16 CPU]
     E --> F{Augmentation?}
-    F -- Train only --> G[RandomFlip · RandomZoom]
-    F -- Val / Test --> H[No augmentation]
+    F -- Train only --> G[RandomResizedCrop · Flip · Rotation · ColorJitter]
+    F -- Val / Test --> H[Resize 224 · Normalize only]
     G --> I
     H --> I
 
@@ -62,11 +64,10 @@ flowchart TD
     I --> J[Baseline:\nVanilla CNN\nfrom scratch]
     I --> K[Transfer Learning:\nEfficientNet-B0\nImageNet weights]
 
-    K --> L[Phase 1: Train Head\n10 epochs · LR=1e-4\nBase frozen]
-    L --> M[Phase 2: Fine-tune All\n50 epochs · LR=1e-5\nEarly stopping patience=5]
+    K --> L[Full fine-tune · AdamW\nLR=2e-4 · CosineAnnealingLR\nEarly stopping patience=4]
 
     J --> N[Evaluation]
-    M --> N
+    L --> N
 
     N --> O[📊 Metrics\nConfusion Matrix · ROC · F1]
     N --> P[🔥 XAI\nGrad-CAM · LIME]
@@ -120,7 +121,7 @@ data/
 
 ## Model Architecture
 
-### Baseline — Vanilla CNN
+### Baseline — Vanilla CNN (TensorFlow/Keras)
 
 A lightweight custom CNN trained from scratch as a performance baseline.
 
@@ -142,29 +143,32 @@ flowchart LR
 | Optimizer | Adam (lr=1e-3) |
 | Loss | Categorical Crossentropy |
 | Epochs | 50 (early stopping) |
+| Saved as | `training_artifacts/vanilla_cnn_model.keras` |
 
 ---
 
-### Transfer Learning — EfficientNet-B0
+### Transfer Learning — EfficientNet-B0 (PyTorch)
 
-EfficientNet-B0 uses **compound scaling** to jointly scale depth, width, and resolution, offering superior accuracy-per-parameter compared to VGG or ResNet baselines.
+EfficientNet-B0 uses **compound scaling** to jointly scale depth, width, and resolution, offering superior accuracy-per-parameter compared to VGG or ResNet baselines. Trained with PyTorch using GPU acceleration.
 
 ```mermaid
 flowchart LR
-    IN[Input\n224×224×3] --> BASE[EfficientNet-B0\nImageNet weights\nfrozen in Phase 1]
-    BASE --> GAP[GlobalAveragePooling2D]
-    GAP --> DR[Dropout 0.3]
-    DR --> OUT[Dense 2\nSoftmax\nMalignant · Benign]
+    IN[Input\n224×224×3] --> BASE[EfficientNet-B0\nImageNet DEFAULT weights\ntorchvision.models]
+    BASE --> CLS[Classifier head\nLinear → 2 outputs]
+    CLS --> SM[Softmax\nMalignant · Benign]
 ```
 
 | Parameter | Value |
 |-----------|-------|
-| Base model | EfficientNet-B0 (Keras Applications) |
+| Base model | EfficientNet-B0 (`torchvision.models`) |
 | Input size | 224 × 224 × 3 |
-| Head | GAP → Dropout(0.3) → Dense(2, softmax) |
-| Phase 1 LR | 1e-4 (head only, 10 epochs) |
-| Phase 2 LR | 1e-5 (full fine-tune, up to 50 epochs) |
-| Early stopping | patience = 5 on `val_loss` |
+| Head | `Linear(1280 → 2)` replacing default classifier |
+| Optimizer | AdamW (lr=2e-4, weight_decay=1e-4) |
+| Scheduler | CosineAnnealingLR (T_max=12) |
+| Loss | CrossEntropyLoss with class weights |
+| Early stopping | patience = 4 on val F1 |
+| Max epochs | 18 |
+| Saved as | `training_artifacts/efficientnet_b0_gpu_best.pt` |
 
 ---
 
@@ -173,21 +177,21 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant D as Dataset
-    participant M as Model
-    participant CB as Callbacks
+    participant M as EfficientNet-B0
+    participant CB as Checkpoint
 
-    D->>M: Phase 1 — Train head only (base frozen, 10 epochs, LR=1e-4)
-    M->>CB: EarlyStopping · ModelCheckpoint
-    CB-->>M: Save best weights
-
-    D->>M: Phase 2 — Unfreeze all layers (fine-tune, LR=1e-5)
-    M->>CB: EarlyStopping · ModelCheckpoint
-    CB-->>M: Save best weights → training_artifacts/
+    D->>M: Full model training · AdamW LR=2e-4 · CosineAnnealingLR
+    M->>CB: Track best val_f1 each epoch
+    CB-->>M: Restore best weights (patience=4)
+    CB-->>CB: Save → training_artifacts/efficientnet_b0_gpu_best.pt
 ```
 
 **Data augmentation** is applied only during training to improve generalization:
-- `RandomFlip` (horizontal + vertical)
-- `RandomZoom` (±10% height and width)
+- `RandomResizedCrop(224, scale=0.75–1.0)`
+- `RandomHorizontalFlip` + `RandomVerticalFlip`
+- `RandomRotation(25°)`
+- `ColorJitter` (brightness, contrast, saturation ±15%)
+- `Normalize` with EfficientNet ImageNet mean/std
 
 ---
 
@@ -278,6 +282,11 @@ skin-cancer-efficientnet-xai/
 │   ├── model_comparison_metrics.csv     Side-by-side model comparison
 │   └── label_mapping.json
 │
+├── 📁 webapp/                           Interactive web application
+│   ├── app.py                           Flask backend (inference API)
+│   └── static/
+│       └── index.html                   Frontend UI
+│
 ├── 📄 requirements.txt                  Python dependencies
 └── 📄 README.md
 ```
@@ -333,7 +342,7 @@ flowchart LR
     B --> C[📊 EDA]
     C --> D[⚙️ Preprocessing]
     D --> E[🧠 Vanilla CNN\nbaseline]
-    E --> F[🚀 EfficientNet-B0\ntransfer learning]
+    E --> F[🚀 EfficientNet-B0\nPyTorch GPU]
     F --> G[📈 Evaluation\nmetrics]
     G --> H[🔥 Grad-CAM\nXAI]
     H --> I[🟩 LIME\nXAI]
@@ -349,19 +358,67 @@ All outputs are automatically saved to `training_artifacts/`:
 
 ---
 
+## Web App
+
+An interactive web application is included for real-time inference using the trained EfficientNet-B0 model.
+
+### Features
+
+- **Upload any image** — drag & drop or browse, classify instantly
+- **Sample test images** — browse 8 random benign + 8 random malignant images from `data/test/`, click to auto-classify
+- **Probability bars** — shows confidence for both benign and malignant classes
+- **Ground truth badge** — for sample images, shows the true label and whether the model was correct
+- **Model metrics panel** — displays live accuracy, AUC, F1, and recall from training artifacts
+
+### Running the Web App
+
+```bash
+pip install flask flask-cors torchvision
+python webapp/app.py
+```
+
+Then open **http://127.0.0.1:5000** in your browser.
+
+```mermaid
+flowchart LR
+    U[User uploads image] --> API[POST /predict\nFlask backend]
+    S[User picks sample] --> API2[POST /predict-path\nFlask backend]
+    API  --> INF[EfficientNet-B0\nPyTorch inference]
+    API2 --> INF
+    INF  --> R[JSON: label · benign% · malignant%]
+    R    --> UI[Frontend result display]
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Serves the web UI |
+| `/predict` | POST | Classify an uploaded image file |
+| `/predict-path` | POST | Classify a server-side sample image by path |
+| `/samples` | GET | Returns 8 random images per class from `data/test/` |
+| `/image` | GET | Serves a local image for preview |
+| `/metrics` | GET | Returns model comparison metrics JSON |
+
+---
+
 ## Tech Stack
 
 | Component | Tool / Library |
 |-----------|---------------|
 | Language | Python 3.10+ |
-| Deep Learning Framework | TensorFlow 2.13+ / Keras |
-| Pretrained Model | EfficientNet-B0 (ImageNet) |
-| Data Pipeline | `tf.data.Dataset` |
+| Deep Learning (EfficientNet) | PyTorch + torchvision |
+| Deep Learning (Baseline CNN) | TensorFlow 2.13+ / Keras |
+| Pretrained Model | EfficientNet-B0 (`EfficientNet_B0_Weights.DEFAULT`) |
+| GPU Training | CUDA via `torch.amp.autocast` + `GradScaler` |
+| Data Pipeline | PyTorch `DataLoader` + `torchvision.transforms` |
 | XAI — Grad-CAM | Manual `tf.GradientTape` implementation |
 | XAI — LIME | `lime` + `scikit-image` |
 | Evaluation | `scikit-learn` (confusion matrix, ROC, F1, MCC) |
 | Visualization | Matplotlib · Seaborn |
 | Dataset | ISIC via `kagglehub` |
+| Web App Backend | Flask + flask-cors |
+| Web App Frontend | Vanilla HTML / CSS / JavaScript |
 | Notebook | Jupyter / VS Code |
 
 ---
@@ -384,5 +441,5 @@ Darker red regions indicate the areas the model weighted most heavily when makin
 ---
 
 <div align="center">
-<sub>Built with TensorFlow · EfficientNet-B0 · Grad-CAM · LIME · ISIC Dataset</sub>
+<sub>Built with PyTorch · TensorFlow · EfficientNet-B0 · Grad-CAM · LIME · Flask · ISIC Dataset</sub>
 </div>

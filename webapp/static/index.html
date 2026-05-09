@@ -16,6 +16,7 @@
       --accent2:   #a78bfa;
       --benign:    #22c55e;
       --malignant: #ef4444;
+      --warn:      #f59e0b;
       --text:      #e2e8f0;
       --muted:     #94a3b8;
       --radius:    14px;
@@ -330,6 +331,61 @@
       transition: border-color 0.2s, color 0.2s;
     }
     #refresh-samples:hover { border-color: var(--accent); color: var(--accent2); }
+
+    /* ── Inline error ── */
+    .error-box {
+      margin-top: 14px;
+      padding: 12px 16px;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.35);
+      border-radius: 10px;
+      color: var(--malignant);
+      font-size: 0.85rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .error-box::before { content: '⚠'; flex-shrink: 0; }
+
+    /* ── Disclaimer ── */
+    .disclaimer {
+      margin-top: 14px;
+      padding: 10px 14px;
+      background: rgba(245,158,11,0.08);
+      border: 1px solid rgba(245,158,11,0.25);
+      border-radius: 8px;
+      font-size: 0.75rem;
+      color: var(--warn);
+      line-height: 1.5;
+    }
+
+    /* ── Skeleton loader for sample images ── */
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+      border-radius: 8px;
+      aspect-ratio: 1;
+    }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+
+    /* ── Confidence ring ── */
+    .confidence-ring {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 10px 0 16px;
+    }
+    .conf-pill {
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+    .conf-pill.high   { background: rgba(34,197,94,0.15);  color: var(--benign); }
+    .conf-pill.medium { background: rgba(245,158,11,0.15); color: var(--warn); }
+    .conf-pill.low    { background: rgba(239,68,68,0.15);  color: var(--malignant); }
   </style>
 </head>
 <body>
@@ -363,7 +419,7 @@
         <button id="clear-btn" title="Remove image">✕</button>
       </div>
 
-      <button id="predict-btn" onclick="runPredict()">
+      <button id="predict-btn">
         Classify Image
       </button>
     </div>
@@ -372,6 +428,7 @@
     <div id="result-card" class="card" style="margin-top:20px;">
       <div class="card-title">📊 Prediction Result</div>
       <div id="result-label" class="result-label"></div>
+      <div class="confidence-ring"><span id="confidence-pill" class="conf-pill high"></span></div>
 
       <div class="prob-row">
         <span class="prob-label">Benign</span>
@@ -393,15 +450,18 @@
       </div>
     </div>
 
+    <!-- Error display -->
+    <div id="error-box" class="error-box" style="display:none;"></div>
+
     <!-- Model metrics card -->
     <div class="card" id="metrics-card" style="margin-top:20px;">
       <div class="card-title">📈 Model Performance</div>
-      <div id="metrics-content" class="metrics-grid">
-        <div class="metric-box"><div class="m-name">Accuracy</div><div class="m-eff">88.6%</div><div class="m-cnn">CNN: 81.4%</div></div>
-        <div class="metric-box"><div class="m-name">AUC (ROC)</div><div class="m-eff">0.960</div><div class="m-cnn">CNN: 0.908</div></div>
-        <div class="metric-box"><div class="m-name">F1 Score</div><div class="m-eff">0.880</div><div class="m-cnn">CNN: 0.815</div></div>
-        <div class="metric-box"><div class="m-name">Recall</div><div class="m-eff">91.3%</div><div class="m-cnn">CNN: 90.0%</div></div>
-      </div>
+      <div id="metrics-content" class="metrics-grid"><!-- populated via /metrics --></div>
+    </div>
+
+    <div class="disclaimer">
+      ⚕ For research and educational purposes only. Not a medical diagnostic tool.
+      Always consult a qualified dermatologist for clinical assessment.
     </div>
   </div>
 
@@ -409,76 +469,130 @@
   <div class="card">
     <div class="card-title">🧪 Sample Test Images</div>
     <p class="section-sub">Click any image to load it and run classification automatically.</p>
-    <button id="refresh-samples" onclick="loadSamples()">↻ Shuffle samples</button>
-    <div id="samples-container">
-      <div style="text-align:center; padding:40px; color:var(--muted);">
-        <div class="spinner" style="border-top-color:var(--accent);"></div> Loading samples…
-      </div>
-    </div>
+    <button id="refresh-samples">↻ Shuffle samples</button>
+    <div id="samples-container"></div>
   </div>
 
 </main>
 
 <script>
-  // ── State ──────────────────────────────────────────────────────────────────
-  let currentFile   = null;   // File object (uploaded)
-  let currentPath   = null;   // server path (sample)
-  let currentTrueLabel = null;
+(function () {
+  "use strict";
 
-  // ── DOM refs ───────────────────────────────────────────────────────────────
+  // ── Constants ───────────────────────────────────────────────────────────────
+  const MAX_FILE_MB   = 10;
+  const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/bmp", "image/webp"]);
+
+  // ── State ───────────────────────────────────────────────────────────────────
+  let currentFile      = null;  // File object (user upload)
+  let currentPath      = null;  // Server-side path (sample image)
+  let currentTrueLabel = null;
+  let previewBlobUrl   = null;  // Track blob URL for cleanup
+
+  // ── DOM refs ────────────────────────────────────────────────────────────────
   const dropZone    = document.getElementById("drop-zone");
   const fileInput   = document.getElementById("file-input");
   const previewWrap = document.getElementById("preview-wrap");
   const previewImg  = document.getElementById("preview-img");
   const predictBtn  = document.getElementById("predict-btn");
   const resultCard  = document.getElementById("result-card");
+  const errorBox    = document.getElementById("error-box");
 
-  // ── Drag & drop ────────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.style.display = "flex";
+  }
+  function clearError() {
+    errorBox.textContent = "";
+    errorBox.style.display = "none";
+  }
+
+  function validateFile(file) {
+    if (!ALLOWED_TYPES.has(file.type)) {
+      showError(`Unsupported file type: "${file.type}". Please upload a JPG, PNG, BMP, or WebP image.`);
+      return false;
+    }
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      showError(`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is ${MAX_FILE_MB} MB.`);
+      return false;
+    }
+    return true;
+  }
+
+  function revokeBlobUrl() {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+      previewBlobUrl = null;
+    }
+  }
+
+  function confLevel(pct) {
+    if (pct >= 80) return "high";
+    if (pct >= 60) return "medium";
+    return "low";
+  }
+
+  // ── Drag & drop ─────────────────────────────────────────────────────────────
   dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("dragover"); });
-  dropZone.addEventListener("dragleave", ()=> dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("dragleave", ()  => dropZone.classList.remove("dragover"));
   dropZone.addEventListener("drop", e => {
     e.preventDefault();
     dropZone.classList.remove("dragover");
     const f = e.dataTransfer.files[0];
     if (f) loadFile(f);
   });
+  dropZone.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
 
   function loadFile(file) {
+    clearError();
+    if (!validateFile(file)) return;
+    revokeBlobUrl();
     currentFile      = file;
     currentPath      = null;
     currentTrueLabel = null;
-    const url        = URL.createObjectURL(file);
-    showPreview(url);
+    previewBlobUrl   = URL.createObjectURL(file);
+    showPreview(previewBlobUrl);
     clearResult();
     document.querySelectorAll(".sample-item").forEach(el => el.classList.remove("selected"));
   }
 
   function showPreview(src) {
-    previewImg.src       = src;
-    previewWrap.style.display = "block";
-    predictBtn.style.display  = "block";
-    dropZone.style.display    = "none";
+    previewImg.src              = src;
+    previewWrap.style.display   = "block";
+    predictBtn.style.display    = "block";
+    dropZone.style.display      = "none";
   }
 
-  document.getElementById("clear-btn").onclick = () => {
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    revokeBlobUrl();
     currentFile = null; currentPath = null; currentTrueLabel = null;
-    previewImg.src = "";
-    previewWrap.style.display = "none";
-    predictBtn.style.display  = "none";
-    dropZone.style.display    = "block";
-    fileInput.value           = "";
+    previewImg.src              = "";
+    previewWrap.style.display   = "none";
+    predictBtn.style.display    = "none";
+    dropZone.style.display      = "block";
+    fileInput.value             = "";
     clearResult();
+    clearError();
     document.querySelectorAll(".sample-item").forEach(el => el.classList.remove("selected"));
-  };
+  });
 
-  // ── Sample loading ─────────────────────────────────────────────────────────
+  // ── Sample loading ──────────────────────────────────────────────────────────
   async function loadSamples() {
     const container = document.getElementById("samples-container");
-    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted);">
-      <div class="spinner" style="border-top-color:var(--accent);"></div> Loading…</div>`;
+
+    // Show skeleton grid while loading
+    const skeletonHTML = `
+      <div class="cls-header benign" style="background:var(--surface2);border-radius:4px;width:80px;height:12px;"></div>
+      <div class="samples-grid" style="margin-bottom:16px;">${"<div class=\"skeleton\"></div>".repeat(8)}</div>
+      <div class="cls-header malignant" style="background:var(--surface2);border-radius:4px;width:100px;height:12px;"></div>
+      <div class="samples-grid">${"<div class=\"skeleton\"></div>".repeat(8)}</div>`;
+    container.innerHTML = skeletonHTML;
+
     try {
       const res  = await fetch("/samples");
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
 
       const hasBenign    = data.benign    && data.benign.length > 0;
@@ -486,37 +600,59 @@
 
       if (!hasBenign && !hasMalignant) {
         container.innerHTML = `<div class="no-samples">
-          No test images found.<br/>
+          No test images found in <code>data/test/</code>.<br/>
           Add images to <code>data/test/benign/</code> and <code>data/test/malignant/</code> to use this feature.
         </div>`;
         return;
       }
 
-      let html = "";
-      if (hasBenign) {
-        html += `<div class="cls-header benign">● Benign (${data.benign.length})</div>`;
-        html += `<div class="samples-grid">`;
-        data.benign.forEach(p => {
-          html += `<div class="sample-item" data-path="${p}" data-cls="benign" onclick="loadSample(this)">
-            <img src="/image?path=${encodeURIComponent(p)}" loading="lazy" alt="benign sample"/>
-            <div class="sample-cls-tag tag-benign">Benign</div>
-          </div>`;
+      container.innerHTML = "";
+
+      ["benign", "malignant"].forEach(cls => {
+        const paths = data[cls];
+        if (!paths || paths.length === 0) return;
+
+        const header = document.createElement("div");
+        header.className = `cls-header ${cls}`;
+        header.textContent = `● ${cls.charAt(0).toUpperCase() + cls.slice(1)} (${paths.length})`;
+        container.appendChild(header);
+
+        const grid = document.createElement("div");
+        grid.className = "samples-grid";
+
+        paths.forEach(p => {
+          const item = document.createElement("div");
+          item.className = "sample-item";
+          item.dataset.path = p;
+          item.dataset.cls  = cls;
+          item.tabIndex     = 0;  // keyboard accessible
+          item.setAttribute("role", "button");
+          item.setAttribute("aria-label", `${cls} sample image`);
+
+          const img = document.createElement("img");
+          img.src     = "/image?path=" + encodeURIComponent(p);
+          img.loading = "lazy";
+          img.alt     = cls + " sample";
+          img.onerror = () => { item.style.opacity = "0.3"; };
+
+          const tag = document.createElement("div");
+          tag.className = `sample-cls-tag tag-${cls}`;
+          tag.textContent = cls.charAt(0).toUpperCase() + cls.slice(1);
+
+          item.appendChild(img);
+          item.appendChild(tag);
+
+          const select = () => loadSample(item);
+          item.addEventListener("click",  select);
+          item.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); } });
+
+          grid.appendChild(item);
         });
-        html += `</div>`;
-      }
-      if (hasMalignant) {
-        html += `<div class="cls-header malignant">● Malignant (${data.malignant.length})</div>`;
-        html += `<div class="samples-grid">`;
-        data.malignant.forEach(p => {
-          html += `<div class="sample-item" data-path="${p}" data-cls="malignant" onclick="loadSample(this)">
-            <img src="/image?path=${encodeURIComponent(p)}" loading="lazy" alt="malignant sample"/>
-            <div class="sample-cls-tag tag-malignant">Malignant</div>
-          </div>`;
-        });
-        html += `</div>`;
-      }
-      container.innerHTML = html;
-    } catch(e) {
+
+        container.appendChild(grid);
+      });
+
+    } catch (e) {
       container.innerHTML = `<div class="no-samples">Failed to load samples: ${e.message}</div>`;
     }
   }
@@ -524,47 +660,48 @@
   function loadSample(el) {
     document.querySelectorAll(".sample-item").forEach(i => i.classList.remove("selected"));
     el.classList.add("selected");
+    clearError();
 
+    revokeBlobUrl();
     currentPath      = el.dataset.path;
     currentFile      = null;
     currentTrueLabel = el.dataset.cls;
 
-    const imgSrc = `/image?path=${encodeURIComponent(currentPath)}`;
-    showPreview(imgSrc);
+    showPreview("/image?path=" + encodeURIComponent(currentPath));
     clearResult();
-
-    // Auto-run prediction
     runPredict();
   }
 
-  // ── Prediction ─────────────────────────────────────────────────────────────
+  // ── Prediction ──────────────────────────────────────────────────────────────
+  predictBtn.addEventListener("click", runPredict);
+
   async function runPredict() {
     if (!currentFile && !currentPath) return;
+    clearError();
 
-    predictBtn.disabled   = true;
-    predictBtn.innerHTML  = `<span class="spinner"></span> Classifying…`;
+    predictBtn.disabled  = true;
+    predictBtn.innerHTML = `<span class="spinner"></span> Classifying…`;
     clearResult();
 
     try {
-      let result;
+      let res;
       if (currentFile) {
         const fd = new FormData();
         fd.append("image", currentFile);
-        const res = await fetch("/predict", { method: "POST", body: fd });
-        result = await res.json();
+        res = await fetch("/predict", { method: "POST", body: fd });
       } else {
-        const res = await fetch("/predict-path", {
-          method: "POST",
+        res = await fetch("/predict-path", {
+          method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: currentPath }),
+          body:    JSON.stringify({ path: currentPath }),
         });
-        result = await res.json();
       }
 
-      if (result.error) throw new Error(result.error);
-      showResult(result, currentTrueLabel || result.true_label);
-    } catch(e) {
-      alert("Prediction failed: " + e.message);
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || `HTTP ${res.status}`);
+      showResult(result, currentTrueLabel || result.true_label || null);
+    } catch (e) {
+      showError("Prediction failed: " + e.message);
     } finally {
       predictBtn.disabled  = false;
       predictBtn.innerHTML = "Classify Image";
@@ -574,23 +711,34 @@
   function showResult(result, trueLabel) {
     resultCard.style.display = "block";
 
-    const labelEl = document.getElementById("result-label");
-    labelEl.textContent  = result.label === "malignant" ? "⚠ Malignant" : "✓ Benign";
-    labelEl.className    = "result-label " + result.label;
+    // Label
+    const labelEl       = document.getElementById("result-label");
+    labelEl.textContent = result.label === "malignant" ? "⚠ Malignant" : "✓ Benign";
+    labelEl.className   = "result-label " + result.label;
 
-    document.getElementById("bar-benign").style.width     = result.benign_prob + "%";
-    document.getElementById("bar-malignant").style.width  = result.malignant_prob + "%";
-    document.getElementById("val-benign").textContent     = result.benign_prob + "%";
-    document.getElementById("val-malignant").textContent  = result.malignant_prob + "%";
+    // Confidence pill
+    const confPct  = result.confidence;
+    const confEl   = document.getElementById("confidence-pill");
+    confEl.textContent = `Confidence: ${confPct}%`;
+    confEl.className   = `conf-pill ${confLevel(confPct)}`;
 
+    // Probability bars — animate from 0 via requestAnimationFrame for smoothness
+    requestAnimationFrame(() => {
+      document.getElementById("bar-benign").style.width    = result.benign_prob    + "%";
+      document.getElementById("bar-malignant").style.width = result.malignant_prob + "%";
+    });
+    document.getElementById("val-benign").textContent    = result.benign_prob    + "%";
+    document.getElementById("val-malignant").textContent = result.malignant_prob + "%";
+
+    // Ground truth badge (only for sample images)
     const trueLabelWrap = document.getElementById("true-label-wrap");
     if (trueLabel) {
       trueLabelWrap.style.display = "block";
       document.getElementById("true-label-text").textContent = trueLabel;
       const correct = result.label === trueLabel;
       const icon    = document.getElementById("correct-icon");
-      icon.textContent  = correct ? "✓" : "✗";
-      icon.className    = correct ? "correct" : "incorrect";
+      icon.textContent = correct ? "✓ Correct" : "✗ Incorrect";
+      icon.className   = correct ? "correct"   : "incorrect";
     } else {
       trueLabelWrap.style.display = "none";
     }
@@ -605,8 +753,42 @@
     document.getElementById("true-label-wrap").style.display = "none";
   }
 
-  // ── Init ───────────────────────────────────────────────────────────────────
+  // ── Metrics (live from /metrics API) ────────────────────────────────────────
+  async function loadMetrics() {
+    const grid = document.getElementById("metrics-content");
+    try {
+      const res  = await fetch("/metrics");
+      const rows = await res.json();  // [{model, accuracy, precision, recall, f1_score, mcc, roc_auc}, ...]
+
+      const eff = rows.find(r => r.model.includes("EfficientNet")) || {};
+      const cnn = rows.find(r => r.model.includes("Vanilla"))      || {};
+
+      const fmt = (v, pct = false) => v ? (pct ? (parseFloat(v) * 100).toFixed(1) + "%" : parseFloat(v).toFixed(3)) : "—";
+
+      grid.innerHTML = [
+        ["Accuracy",  fmt(eff.accuracy, true),  fmt(cnn.accuracy, true)],
+        ["AUC (ROC)", fmt(eff.roc_auc),         fmt(cnn.roc_auc)],
+        ["F1 Score",  fmt(eff.f1_score),        fmt(cnn.f1_score)],
+        ["Recall",    fmt(eff.recall, true),    fmt(cnn.recall, true)],
+        ["Precision", fmt(eff.precision, true), fmt(cnn.precision, true)],
+        ["MCC",       fmt(eff.mcc),             fmt(cnn.mcc)],
+      ].map(([name, effVal, cnnVal]) => `
+        <div class="metric-box">
+          <div class="m-name">${name}</div>
+          <div class="m-eff">${effVal}</div>
+          <div class="m-cnn">CNN: ${cnnVal}</div>
+        </div>`).join("");
+    } catch {
+      grid.innerHTML = `<div style="color:var(--muted);font-size:0.8rem;grid-column:span 2;">Metrics unavailable</div>`;
+    }
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  document.getElementById("refresh-samples").addEventListener("click", loadSamples);
   loadSamples();
+  loadMetrics();
+
+})();
 </script>
 </body>
 </html>
