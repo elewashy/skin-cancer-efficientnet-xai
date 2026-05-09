@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Skin Cancer Classifier — EfficientNet-B0</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --border:    #2e3350;
+      --accent:    #6c63ff;
+      --accent2:   #a78bfa;
+      --benign:    #22c55e;
+      --malignant: #ef4444;
+      --text:      #e2e8f0;
+      --muted:     #94a3b8;
+      --radius:    14px;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo {
+      width: 42px; height: 42px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+    }
+    header h1 { font-size: 1.3rem; font-weight: 700; }
+    header p  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .badge {
+      margin-left: auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 0.75rem;
+      color: var(--accent2);
+      font-weight: 600;
+    }
+
+    /* ── Layout ── */
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 36px 24px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; }
+      header { padding: 16px 20px; }
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+    }
+    .card-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent2);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Upload zone ── */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+    #drop-zone:hover, #drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(108, 99, 255, 0.06);
+    }
+    #drop-zone .icon { font-size: 48px; margin-bottom: 12px; }
+    #drop-zone p { color: var(--muted); font-size: 0.9rem; }
+    #drop-zone strong { color: var(--text); }
+    #file-input { display: none; }
+
+    /* ── Preview ── */
+    #preview-wrap {
+      display: none;
+      margin-top: 20px;
+      position: relative;
+    }
+    #preview-img {
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border-radius: 10px;
+      background: var(--surface2);
+      display: block;
+    }
+    #clear-btn {
+      position: absolute;
+      top: 8px; right: 8px;
+      background: rgba(0,0,0,0.6);
+      border: none;
+      color: white;
+      border-radius: 50%;
+      width: 30px; height: 30px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #clear-btn:hover { background: var(--malignant); }
+
+    /* ── Predict button ── */
+    #predict-btn {
+      width: 100%;
+      margin-top: 18px;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--accent), #8b5cf6);
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      display: none;
+    }
+    #predict-btn:hover  { opacity: 0.9; }
+    #predict-btn:active { transform: scale(0.98); }
+    #predict-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Result ── */
+    #result-card {
+      display: none;
+      margin-top: 20px;
+    }
+    .result-label {
+      font-size: 2rem;
+      font-weight: 800;
+      text-align: center;
+      padding: 18px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .result-label.benign    { background: rgba(34,197,94,0.15);  color: var(--benign); }
+    .result-label.malignant { background: rgba(239,68,68,0.15);  color: var(--malignant); }
+
+    .prob-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 0.88rem;
+    }
+    .prob-label { color: var(--muted); min-width: 90px; }
+    .prob-bar-wrap {
+      flex: 1;
+      height: 8px;
+      background: var(--surface2);
+      border-radius: 4px;
+      margin: 0 12px;
+      overflow: hidden;
+    }
+    .prob-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.6s ease;
+    }
+    .prob-bar.benign    { background: var(--benign); }
+    .prob-bar.malignant { background: var(--malignant); }
+    .prob-val { font-weight: 700; min-width: 48px; text-align: right; }
+
+    .true-label-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .correct   { color: var(--benign); }
+    .incorrect { color: var(--malignant); }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 20px; height: 20px;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Samples ── */
+    .samples-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    @media (max-width: 600px) {
+      .samples-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .sample-item {
+      cursor: pointer;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      transition: border-color 0.2s, transform 0.15s;
+      position: relative;
+      aspect-ratio: 1;
+      background: var(--surface2);
+    }
+    .sample-item:hover { border-color: var(--accent); transform: scale(1.03); }
+    .sample-item.selected { border-color: var(--accent2); }
+    .sample-item img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .sample-cls-tag {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 4px 6px;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .tag-benign    { background: rgba(34,197,94,0.85);  color: #fff; }
+    .tag-malignant { background: rgba(239,68,68,0.85);  color: #fff; }
+
+    .section-sub {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .cls-header {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin: 16px 0 10px;
+    }
+    .cls-header.benign    { color: var(--benign); }
+    .cls-header.malignant { color: var(--malignant); }
+
+    /* ── Metrics panel ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .metric-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .metric-box .m-name  { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .metric-box .m-eff   { font-size: 1.4rem; font-weight: 800; color: var(--accent2); }
+    .metric-box .m-cnn   { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+
+    /* ── No samples warning ── */
+    .no-samples {
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+      background: var(--surface2);
+      border-radius: 10px;
+      line-height: 1.7;
+    }
+    .no-samples code {
+      background: var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      color: var(--accent2);
+    }
+
+    /* ── Refresh samples ── */
+    #refresh-samples {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      margin-left: auto;
+      display: block;
+      margin-bottom: 14px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #refresh-samples:hover { border-color: var(--accent); color: var(--accent2); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🔬</div>
+  <div>
+    <h1>Skin Cancer Classifier</h1>
+    <p>EfficientNet-B0 · Transfer Learning · XAI</p>
+  </div>
+  <span class="badge">AUC 0.960 · Acc 88.6%</span>
+</header>
+
+<main>
+
+  <!-- ── Left column: upload + result ── -->
+  <div>
+    <!-- Upload card -->
+    <div class="card">
+      <div class="card-title">🖼 Classify an Image</div>
+
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="icon">📤</div>
+        <p><strong>Click to upload</strong> or drag & drop</p>
+        <p style="margin-top:6px; font-size:0.78rem;">JPG, JPEG, PNG supported</p>
+      </div>
+      <input type="file" id="file-input" accept="image/*" />
+
+      <div id="preview-wrap">
+        <img id="preview-img" src="" alt="Preview" />
+        <button id="clear-btn" title="Remove image">✕</button>
+      </div>
+
+      <button id="predict-btn" onclick="runPredict()">
+        Classify Image
+      </button>
+    </div>
+
+    <!-- Result card -->
+    <div id="result-card" class="card" style="margin-top:20px;">
+      <div class="card-title">📊 Prediction Result</div>
+      <div id="result-label" class="result-label"></div>
+
+      <div class="prob-row">
+        <span class="prob-label">Benign</span>
+        <div class="prob-bar-wrap"><div class="prob-bar benign" id="bar-benign" style="width:0%"></div></div>
+        <span class="prob-val" id="val-benign">—</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">Malignant</span>
+        <div class="prob-bar-wrap"><div class="prob-bar malignant" id="bar-malignant" style="width:0%"></div></div>
+        <span class="prob-val" id="val-malignant">—</span>
+      </div>
+
+      <div id="true-label-wrap" style="display:none; text-align:center;">
+        <span class="true-label-badge">
+          <span>Ground truth:</span>
+          <span id="true-label-text" style="font-weight:700;"></span>
+          <span id="correct-icon"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Model metrics card -->
+    <div class="card" id="metrics-card" style="margin-top:20px;">
+      <div class="card-title">📈 Model Performance</div>
+      <div id="metrics-content" class="metrics-grid">
+        <div class="metric-box"><div class="m-name">Accuracy</div><div class="m-eff">88.6%</div><div class="m-cnn">CNN: 81.4%</div></div>
+        <div class="metric-box"><div class="m-name">AUC (ROC)</div><div class="m-eff">0.960</div><div class="m-cnn">CNN: 0.908</div></div>
+        <div class="metric-box"><div class="m-name">F1 Score</div><div class="m-eff">0.880</div><div class="m-cnn">CNN: 0.815</div></div>
+        <div class="metric-box"><div class="m-name">Recall</div><div class="m-eff">91.3%</div><div class="m-cnn">CNN: 90.0%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Right column: sample images ── -->
+  <div class="card">
+    <div class="card-title">🧪 Sample Test Images</div>
+    <p class="section-sub">Click any image to load it and run classification automatically.</p>
+    <button id="refresh-samples" onclick="loadSamples()">↻ Shuffle samples</button>
+    <div id="samples-container">
+      <div style="text-align:center; padding:40px; color:var(--muted);">
+        <div class="spinner" style="border-top-color:var(--accent);"></div> Loading samples…
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let currentFile   = null;   // File object (uploaded)
+  let currentPath   = null;   // server path (sample)
+  let currentTrueLabel = null;
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const dropZone    = document.getElementById("drop-zone");
+  const fileInput   = document.getElementById("file-input");
+  const previewWrap = document.getElementById("preview-wrap");
+  const previewImg  = document.getElementById("preview-img");
+  const predictBtn  = document.getElementById("predict-btn");
+  const resultCard  = document.getElementById("result-card");
+
+  // ── Drag & drop ────────────────────────────────────────────────────────────
+  dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", ()=> dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+    const f = e.dataTransfer.files[0];
+    if (f) loadFile(f);
+  });
+  fileInput.addEventListener("change", () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+  function loadFile(file) {
+    currentFile      = file;
+    currentPath      = null;
+    currentTrueLabel = null;
+    const url        = URL.createObjectURL(file);
+    showPreview(url);
+    clearResult();
+    document.querySelectorAll(".sample-item").forEach(el => el.classList.remove("selected"));
+  }
+
+  function showPreview(src) {
+    previewImg.src       = src;
+    previewWrap.style.display = "block";
+    predictBtn.style.display  = "block";
+    dropZone.style.display    = "none";
+  }
+
+  document.getElementById("clear-btn").onclick = () => {
+    currentFile = null; currentPath = null; currentTrueLabel = null;
+    previewImg.src = "";
+    previewWrap.style.display = "none";
+    predictBtn.style.display  = "none";
+    dropZone.style.display    = "block";
+    fileInput.value           = "";
+    clearResult();
+    document.querySelectorAll(".sample-item").forEach(el => el.classList.remove("selected"));
+  };
+
+  // ── Sample loading ─────────────────────────────────────────────────────────
+  async function loadSamples() {
+    const container = document.getElementById("samples-container");
+    container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--muted);">
+      <div class="spinner" style="border-top-color:var(--accent);"></div> Loading…</div>`;
+    try {
+      const res  = await fetch("/samples");
+      const data = await res.json();
+
+      const hasBenign    = data.benign    && data.benign.length > 0;
+      const hasMalignant = data.malignant && data.malignant.length > 0;
+
+      if (!hasBenign && !hasMalignant) {
+        container.innerHTML = `<div class="no-samples">
+          No test images found.<br/>
+          Add images to <code>data/test/benign/</code> and <code>data/test/malignant/</code> to use this feature.
+        </div>`;
+        return;
+      }
+
+      let html = "";
+      if (hasBenign) {
+        html += `<div class="cls-header benign">● Benign (${data.benign.length})</div>`;
+        html += `<div class="samples-grid">`;
+        data.benign.forEach(p => {
+          html += `<div class="sample-item" data-path="${p}" data-cls="benign" onclick="loadSample(this)">
+            <img src="/image?path=${encodeURIComponent(p)}" loading="lazy" alt="benign sample"/>
+            <div class="sample-cls-tag tag-benign">Benign</div>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+      if (hasMalignant) {
+        html += `<div class="cls-header malignant">● Malignant (${data.malignant.length})</div>`;
+        html += `<div class="samples-grid">`;
+        data.malignant.forEach(p => {
+          html += `<div class="sample-item" data-path="${p}" data-cls="malignant" onclick="loadSample(this)">
+            <img src="/image?path=${encodeURIComponent(p)}" loading="lazy" alt="malignant sample"/>
+            <div class="sample-cls-tag tag-malignant">Malignant</div>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+      container.innerHTML = html;
+    } catch(e) {
+      container.innerHTML = `<div class="no-samples">Failed to load samples: ${e.message}</div>`;
+    }
+  }
+
+  function loadSample(el) {
+    document.querySelectorAll(".sample-item").forEach(i => i.classList.remove("selected"));
+    el.classList.add("selected");
+
+    currentPath      = el.dataset.path;
+    currentFile      = null;
+    currentTrueLabel = el.dataset.cls;
+
+    const imgSrc = `/image?path=${encodeURIComponent(currentPath)}`;
+    showPreview(imgSrc);
+    clearResult();
+
+    // Auto-run prediction
+    runPredict();
+  }
+
+  // ── Prediction ─────────────────────────────────────────────────────────────
+  async function runPredict() {
+    if (!currentFile && !currentPath) return;
+
+    predictBtn.disabled   = true;
+    predictBtn.innerHTML  = `<span class="spinner"></span> Classifying…`;
+    clearResult();
+
+    try {
+      let result;
+      if (currentFile) {
+        const fd = new FormData();
+        fd.append("image", currentFile);
+        const res = await fetch("/predict", { method: "POST", body: fd });
+        result = await res.json();
+      } else {
+        const res = await fetch("/predict-path", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: currentPath }),
+        });
+        result = await res.json();
+      }
+
+      if (result.error) throw new Error(result.error);
+      showResult(result, currentTrueLabel || result.true_label);
+    } catch(e) {
+      alert("Prediction failed: " + e.message);
+    } finally {
+      predictBtn.disabled  = false;
+      predictBtn.innerHTML = "Classify Image";
+    }
+  }
+
+  function showResult(result, trueLabel) {
+    resultCard.style.display = "block";
+
+    const labelEl = document.getElementById("result-label");
+    labelEl.textContent  = result.label === "malignant" ? "⚠ Malignant" : "✓ Benign";
+    labelEl.className    = "result-label " + result.label;
+
+    document.getElementById("bar-benign").style.width     = result.benign_prob + "%";
+    document.getElementById("bar-malignant").style.width  = result.malignant_prob + "%";
+    document.getElementById("val-benign").textContent     = result.benign_prob + "%";
+    document.getElementById("val-malignant").textContent  = result.malignant_prob + "%";
+
+    const trueLabelWrap = document.getElementById("true-label-wrap");
+    if (trueLabel) {
+      trueLabelWrap.style.display = "block";
+      document.getElementById("true-label-text").textContent = trueLabel;
+      const correct = result.label === trueLabel;
+      const icon    = document.getElementById("correct-icon");
+      icon.textContent  = correct ? "✓" : "✗";
+      icon.className    = correct ? "correct" : "incorrect";
+    } else {
+      trueLabelWrap.style.display = "none";
+    }
+
+    resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function clearResult() {
+    resultCard.style.display = "none";
+    document.getElementById("bar-benign").style.width    = "0%";
+    document.getElementById("bar-malignant").style.width = "0%";
+    document.getElementById("true-label-wrap").style.display = "none";
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  loadSamples();
+</script>
+</body>
+</html>
